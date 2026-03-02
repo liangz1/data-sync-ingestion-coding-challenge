@@ -43,9 +43,17 @@ services:
   ingestion:
     build: ./packages/ingestion
     container_name: assignment-ingestion
+    environment:
+      API_BASE_URL: http://mock-api:8787/api/v1
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - assignment-network
+
+  mock-api:
+    build: ./mock-api
+    container_name: assignment-mock-api
     networks:
       - assignment-network
 
