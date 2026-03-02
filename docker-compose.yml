@@ -14,6 +14,7 @@ services:
       - "5434:5432"
     volumes:
       - assignment_postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -38,6 +39,15 @@ services:
   #       condition: service_healthy
   #   networks:
   #     - assignment-network
+
+  ingestion:
+    build: ./packages/ingestion
+    container_name: assignment-ingestion
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - assignment-network
 
 volumes:
   assignment_postgres_data:
