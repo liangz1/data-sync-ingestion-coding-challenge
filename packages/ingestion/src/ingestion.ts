@@ -61,25 +61,29 @@ export async function runIngestion(
     metrics.attempted += page.data.length;
 
     const dbStart = nowMs();
-    // IMPORTANT: deps.savePage should return how many rows were inserted (see below)
-    const insertedThisPage = await deps.savePage(db, page);
+    let insertedThisPage = 0;
+
+    if (page.hasMore) {
+      if (!page.nextCursor) {
+        throw new Error(
+          `[ingestion] Protocol violation: hasMore=true but nextCursor is missing (cursor=${
+            cursor ?? "BEGIN"
+          }, pageSize=${page.data.length}).`
+        );
+      }
+
+      const r = await deps.savePageAndCursor(db, page, page.nextCursor);
+      insertedThisPage = r.inserted;
+      cursor = page.nextCursor;
+    } else {
+      // last page: no cursor update needed
+      insertedThisPage = await deps.savePage(db, page);
+    }
+
     const dbDur = nowMs() - dbStart;
     metrics.dbMs += dbDur;
 
     metrics.inserted += insertedThisPage;
-
-    // Cursor advance
-    if (page.hasMore) {
-        if (!page.nextCursor) {
-        throw new Error(
-            `[ingestion] Protocol violation: hasMore=true but nextCursor is missing (cursor=${
-            cursor ?? "BEGIN"
-            }, pageSize=${page.data.length}).`
-        );
-        }
-        await deps.saveCursor(db, page.nextCursor);
-        cursor = page.nextCursor;
-    }
 
     // Periodic summary
     if (metrics.pages % logEveryPages === 0) {

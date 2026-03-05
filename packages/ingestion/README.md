@@ -1,158 +1,339 @@
-# DataSync Ingestion Service
+# Event Ingestion Service
 
-A production-ready data ingestion system that extracts events from the
-DataSync Analytics API and stores them in PostgreSQL.
+A resilient ingestion service that fetches events from a paginated HTTP API and stores them in PostgreSQL.
 
-------------------------------------------------------------------------
+The service supports:
 
-## Architecture Overview
+- Cursor-based incremental ingestion
+- Idempotent writes
+- Automatic recovery after restart
+- Rate limit handling
+- Transactional page commits
+- Basic ingestion metrics
 
-The system is structured into clear responsibility boundaries:
+---
 
-    src/
-      env.ts         // Environment variable handling
-      api.ts         // API client (HTTP layer)
-      db.ts          // PostgreSQL access layer
-      ingestion.ts   // Core ingestion loop (pure control flow)
-      types.ts       // Shared type definitions
-      index.ts       // Runtime wiring / entrypoint
+# Architecture
 
-### Design Principles
+The ingestion loop performs the following steps:
 
--   **Separation of concerns**
-    -   Network, database, and control flow are isolated
--   **Testability**
-    -   `runIngestion` is dependency-injected and fully unit-testable
--   **Idempotency**
-    -   `ON CONFLICT DO NOTHING` prevents duplicate inserts
--   **Resumability**
-    -   Cursor is persisted in `ingestion_state`
--   **Fail-fast safety**
-    -   Guard against infinite loops
-    -   Detect protocol violations (`hasMore=true` without `nextCursor`)
--   **Deterministic control flow**
-    -   No hidden global state
+1. Load the last processed cursor from the database.
+2. Fetch a page of events from the API.
+3. Store the events in PostgreSQL.
+4. Persist the next cursor.
+5. Repeat until `hasMore=false`.
 
-------------------------------------------------------------------------
+Each page is processed exactly once in normal operation, and ingestion can safely resume after interruption.
 
-## How It Works
+---
 
-1.  Connect to PostgreSQL
-2.  Run schema migration (idempotent)
-3.  Load last stored cursor
-4.  Repeatedly:
-    -   Fetch a page of events
-    -   Store events in bulk
-    -   Persist cursor
-5.  Stop when `hasMore=false`
-6.  Print total row count
+# Data Model
 
-------------------------------------------------------------------------
+## ingested_events
 
-## Running the Service
+Stores the raw events returned by the API.
 
-Start all services:
+Primary key ensures idempotency.
 
-``` bash
-docker compose up -d --build
+```
+id TEXT PRIMARY KEY
+ts TIMESTAMP
+type TEXT
+raw JSONB
 ```
 
-Or use the provided script:
+Duplicates are ignored using:
 
-``` bash
-sh run-ingestion.sh
+```
+ON CONFLICT (id) DO NOTHING
 ```
 
-The ingestion service will:
+---
 
--   Connect to PostgreSQL
--   Ingest events
--   Resume automatically after crash
--   Exit when complete
+## ingestion_state
 
-------------------------------------------------------------------------
+Stores the ingestion cursor.
 
-## Database Schema
+```
+key TEXT PRIMARY KEY
+value TEXT
+updated_at TIMESTAMP
+```
 
-### `ingested_events`
+Only one key is currently used:
 
-  Column        Type          Description
-  ------------- ------------- ---------------------
-  id            TEXT (PK)     Event ID
-  ts            TIMESTAMPTZ   Event timestamp
-  type          TEXT          Event type
-  raw           JSONB         Full event payload
-  ingested_at   TIMESTAMPTZ   Ingestion timestamp
+```
+cursor
+```
 
-### `ingestion_state`
+---
 
-  Column       Type          Description
-  ------------ ------------- -------------
-  key          TEXT (PK)     State key
-  value        TEXT          State value
-  updated_at   TIMESTAMPTZ   Last update
+# Transactional Ingestion
 
-------------------------------------------------------------------------
+To ensure consistency during ingestion, each page commit is performed in a **single database transaction**.
 
-## Testing Strategy
+Within one transaction:
 
-Unit tests are split by layer:
+1. Insert events
+2. Update cursor
+3. Commit
 
--   `env.test.ts`
--   `api.test.ts`
--   `db.test.ts`
--   `ingestion.test.ts`
--   `index.test.ts` (wiring)
+```
+BEGIN
 
-The core ingestion loop is fully mocked and does not require a real
-database or network.
+INSERT INTO ingested_events ...
+ON CONFLICT DO NOTHING
 
-Run tests:
+UPSERT ingestion_state(cursor)
 
-``` bash
+COMMIT
+```
+
+This guarantees:
+
+- No cursor advancement without persisted data
+- No partial page ingestion
+- Safe restart after crashes
+
+---
+
+# Rate Limit Handling
+
+The API may return HTTP **429 (Too Many Requests)**.
+
+The ingestion client automatically retries requests when rate limits occur.
+
+Supported headers:
+
+### Retry-After
+
+```
+Retry-After: <seconds>
+```
+
+The client waits the specified number of seconds before retrying.
+
+### X-RateLimit-Reset
+
+```
+X-RateLimit-Reset: <epoch_seconds>
+```
+
+The client waits until the reset timestamp.
+
+### Logging
+
+The client logs remaining quota if provided:
+
+```
+[ingestion] ratelimit-remaining=99
+```
+
+This helps operators monitor available request budget.
+
+---
+
+# Metrics
+
+Periodic ingestion metrics are logged every N pages:
+
+```
+[ingestion][metrics]
+pages=10
+attempted=10000
+inserted=9987
+fetchMs=210
+dbMs=180
+insertedPerSec=4200
+```
+
+Metrics include:
+
+| Metric | Meaning |
+|------|------|
+| pages | number of processed pages |
+| attempted | events received from API |
+| inserted | rows inserted into DB |
+| fetchMs | total API request time |
+| dbMs | total database write time |
+| insertedPerSec | ingestion throughput |
+
+---
+
+# Idempotency
+
+The system is designed for **at-least-once ingestion**.
+
+Possible scenarios:
+
+- restart during ingestion
+- duplicate page fetch
+- network retry
+
+Duplicates are safely ignored by the database primary key constraint.
+
+Example log:
+
+```
+attempted=1000 inserted=0
+```
+
+This indicates the page was already previously ingested.
+
+---
+
+# Resumability
+
+On startup the service resumes from the last saved cursor:
+
+```
+[ingestion] starting from cursor=9000
+```
+
+If the service crashes mid-run, ingestion continues from that position on restart.
+
+---
+
+# Running the Service
+
+```
+docker compose up
+```
+
+Logs will show ingestion progress:
+
+```
+[ingestion] starting from cursor=BEGIN
+[ingestion] GET /events?limit=1000
+[ingestion] attempted=1000 inserted=1000
+```
+
+---
+
+# Testing
+
+Run unit tests:
+
+```
 npm test
 ```
 
-------------------------------------------------------------------------
+Tests cover:
 
-## Safety Guards
+- API pagination
+- rate limit retry logic
+- database insertion
+- cursor persistence
+- ingestion loop behavior
 
-The ingestion loop includes:
+---
 
--   `maxPages` limit (infinite loop protection)
--   Protocol validation (`hasMore` must include `nextCursor`)
--   Idempotent inserts
+# Failure Scenarios & Guarantees
 
-------------------------------------------------------------------------
+The ingestion system is designed to remain correct under common failure scenarios.
 
-## Rate Limit Handling
+## Crash During API Fetch
 
-The API enforces rate limits and may return `429 Too Many Requests` (or transient `503 Service Unavailable`). The ingestion client is rate-limit aware and applies a retry/backoff strategy:
+If the service crashes while fetching a page:
 
-- **Auth header:** requests include `X-API-Key` (from `TARGET_API_KEY`) for header-based authentication.
-- **Retryable statuses:** `429` and `503` trigger retries; other non-2xx responses fail fast with an error that includes the HTTP status and response body.
-- **Server-guided backoff:** if present, the client respects:
-  - `Retry-After` (seconds or HTTP-date)
-  - `X-RateLimit-Reset` (epoch seconds or milliseconds)
-- **Exponential backoff + jitter:** when server guidance is missing, the client uses exponential backoff (capped) plus a small random jitter to avoid thundering herd.
-- **Observability:** the client logs `ratelimit-remaining` (from `X-RateLimit-Remaining` / `RateLimit-Remaining`) when provided by the API to help diagnose throttling.
-- **Safety cap:** retries are bounded by a maximum retry count to avoid infinite retry loops.
+- No database writes have occurred
+- Cursor remains unchanged
 
-------------------------------------------------------------------------
+On restart the same page will be fetched again.
 
-## Next Steps (Planned Enhancements)
+This is safe because ingestion is idempotent.
 
--   Throughput optimization (parallel page fetching)
--   Metrics and ingestion rate logging
--   Bulk insert optimizations (COPY)
--   Integration tests with real DB container
+---
 
-------------------------------------------------------------------------
+## Crash During Database Insert
 
-## Tools Used
+If the service crashes during page insertion:
 
--   Node.js 20
--   TypeScript
--   PostgreSQL 16
--   Docker Compose
--   Vitest
+- The database transaction is rolled back
+- No partial page writes are committed
+- Cursor is not advanced
+
+The same page will be retried on restart.
+
+---
+
+## Crash After Insert But Before Cursor Update
+
+This situation is prevented by the transactional design.
+
+Event insertion and cursor persistence occur in the same transaction:
+
+```
+BEGIN
+INSERT events
+UPSERT cursor
+COMMIT
+```
+
+Therefore:
+
+- Either both succeed
+- Or both fail
+
+The system never advances the cursor without storing the corresponding events.
+
+---
+
+## Duplicate Page Fetch
+
+Network retries or restarts may cause the same page to be processed more than once.
+
+Duplicates are handled safely via the primary key constraint:
+
+```
+ON CONFLICT (id) DO NOTHING
+```
+
+Example log:
+
+```
+attempted=1000 inserted=0
+```
+
+This indicates that all events already existed in the database.
+
+---
+
+## API Protocol Violations
+
+If the API returns:
+
+```
+hasMore = true
+but nextCursor is missing
+```
+
+The ingestion process fails fast with an explicit error.
+
+This prevents silent data loss caused by malformed pagination responses.
+
+---
+
+## Guarantees
+
+The system provides the following guarantees:
+
+| Property | Guarantee |
+|--------|--------|
+| No data loss | Cursor never advances without persisted events |
+| Idempotency | Duplicate events are ignored |
+| Crash safety | Safe restart after failure |
+| At-least-once ingestion | Pages may be retried but never skipped |
+
+These properties ensure reliable ingestion even under network errors, rate limiting, or process crashes.
+
+---
+
+# Future Improvements
+
+Possible optimizations:
+
+- concurrent page prefetching
+- batch COPY ingestion for higher throughput
+- adaptive rate limit scheduling
+- structured metrics export (Prometheus)

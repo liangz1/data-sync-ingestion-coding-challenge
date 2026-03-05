@@ -82,6 +82,35 @@ export async function savePage(
   return inserted;
 }
 
+export async function savePageAndCursorTx(
+  client: Client,
+  page: EventsResponse,
+  nextCursor: string | undefined
+): Promise<{ inserted: number }> {
+  await client.query("BEGIN");
+  try {
+    const inserted = await savePage(client, page);
+
+    if (nextCursor) {
+      await client.query(
+        `
+        INSERT INTO ingestion_state(key, value)
+        VALUES ('cursor', $1)
+        ON CONFLICT (key)
+        DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+        `,
+        [nextCursor]
+      );
+    }
+
+    await client.query("COMMIT");
+    return { inserted };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  }
+}
+
 export async function printCount(client: Client): Promise<void> {
   const r = await client.query(
     `SELECT COUNT(*)::bigint AS c FROM ingested_events;`

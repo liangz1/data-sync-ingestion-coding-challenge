@@ -20,7 +20,14 @@ export type IngestionDeps = {
   retrievePage: (baseUrl: string, limit: number, cursor?: string) => Promise<EventsResponse>;
   savePage: (db: Client, page: EventsResponse) => Promise<number>;
   loadCursor: (db: Client) => Promise<string | undefined>;
+  // saveCursor is retained for backward compatibility but not used in the transactional path.
   saveCursor: (db: Client, cursor: string) => Promise<void>;
+  // Transactional write: page + cursor in one atomic commit
+  savePageAndCursor: (
+    db: Client,
+    page: EventsResponse,
+    nextCursor: string
+  ) => Promise<{ inserted: number }>;
   printCount: (db: Client) => Promise<void>;
 };
 

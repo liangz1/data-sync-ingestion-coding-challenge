@@ -1,6 +1,6 @@
 import { requireEnv } from "./env";
 import { retrievePage } from "./api";
-import { connectDb, migrate, loadCursor, saveCursor, savePage, printCount } from "./db";
+import { connectDb, migrate, loadCursor, saveCursor, savePage, savePageAndCursorTx, printCount } from "./db";
 import { runIngestion } from "./ingestion";
 
 export async function main(): Promise<void> {
@@ -10,7 +10,7 @@ export async function main(): Promise<void> {
   await migrate(db);
 
   await runIngestion(
-    { retrievePage, savePage, loadCursor, saveCursor, printCount },
+    { retrievePage, savePage, loadCursor, saveCursor, savePageAndCursor: savePageAndCursorTx, printCount },
     { baseUrl, limit: 1000, db }
   );
 }

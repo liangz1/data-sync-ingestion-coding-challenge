@@ -9,6 +9,9 @@ describe("ingestion", () => {
       savePage: vi.fn(async (_db, page) => page.data.length),
       loadCursor: vi.fn(async () => undefined),
       saveCursor: vi.fn(async () => {}),
+      savePageAndCursor: vi.fn(async (_db, page, _nextCursor) => ({
+        inserted: page.data.length,
+      })),
       printCount: vi.fn(async () => {}),
       ...overrides,
     };
@@ -43,11 +46,13 @@ describe("ingestion", () => {
     expect(deps.retrievePage).toHaveBeenNthCalledWith(1, "http://x", 1000, undefined);
     expect(deps.retrievePage).toHaveBeenNthCalledWith(2, "http://x", 1000, "c1");
 
-    expect(deps.savePage).toHaveBeenCalledTimes(2);
-
-    // After your code change: saveCursor only on hasMore=true
-    expect(deps.saveCursor).toHaveBeenCalledTimes(1);
-    expect(deps.saveCursor).toHaveBeenCalledWith(db, "c1");
+    expect(deps.savePageAndCursor).toHaveBeenCalledTimes(1);
+    expect(deps.savePage).toHaveBeenCalledTimes(1);
+    expect(deps.savePageAndCursor).toHaveBeenCalledWith(
+      expect.anything(), // db
+      expect.anything(), // page
+      "c1"               // nextCursor
+    );
 
     expect(deps.printCount).toHaveBeenCalledTimes(1);
   });
@@ -120,6 +125,9 @@ describe("ingestion", () => {
       }),
       loadCursor: vi.fn(async () => undefined),
       saveCursor: vi.fn(async () => {}),
+      savePageAndCursor: vi.fn(async (_db, page, _nextCursor) => ({
+        inserted: page.data.length - 1,
+      })),
       printCount: vi.fn(async () => {}),
     };
 
@@ -134,7 +142,8 @@ describe("ingestion", () => {
 
     // Verify we indeed processed 10 pages
     expect(deps.retrievePage).toHaveBeenCalledTimes(10);
-    expect(deps.savePage).toHaveBeenCalledTimes(10);
+    expect(deps.savePage).toHaveBeenCalledTimes(1);
+    expect(deps.savePageAndCursor).toHaveBeenCalledTimes(9);
 
     // Find the metrics summary log line
     const calls = logSpy.mock.calls.map((c) => String(c[0]));
@@ -186,5 +195,26 @@ describe("ingestion", () => {
     expect(calls).not.toMatch(/NaN/);
 
     logSpy.mockRestore();
+  });
+
+  it("uses transactional write (page+cursor) when hasMore=true", async () => {
+    const pages: EventsResponse[] = [
+      { data: [{ id: "1", ts: "t", type: "x" }], hasMore: true, nextCursor: "1" },
+      { data: [{ id: "2", ts: "t", type: "x" }], hasMore: false },
+    ];
+
+    const deps = {
+      retrievePage: vi.fn(async () => pages.shift()!),
+      savePage: vi.fn(async (_db, page) => page.data.length),
+      saveCursor: vi.fn(async () => {}),
+      savePageAndCursor: vi.fn(async (_db, page) => ({ inserted: page.data.length })),
+      loadCursor: vi.fn(async () => undefined),
+      printCount: vi.fn(async () => {}),
+    };
+
+    await runIngestion(deps as any, { baseUrl: "http://x", limit: 1000, db: {} as any, maxPages: 10 });
+
+    expect(deps.savePageAndCursor).toHaveBeenCalledTimes(1);
+    expect(deps.savePage).toHaveBeenCalledTimes(1); // only last page
   });
 });

@@ -3,20 +3,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Important: mock dependencies BEFORE importing the module under test
 vi.mock("./env", () => ({ requireEnv: vi.fn() }));
 vi.mock("./api", () => ({ retrievePage: vi.fn() }));
-vi.mock("./db", () => ({
-  connectDb: vi.fn(),
-  migrate: vi.fn(),
-  loadCursor: vi.fn(),
-  saveCursor: vi.fn(),
-  savePage: vi.fn(),
-  printCount: vi.fn(),
-}));
+vi.mock("./db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./db")>();
+  return {
+    ...actual,
+    connectDb: vi.fn(async () => ({}) as any),
+    migrate: vi.fn(async () => {}),
+    printCount: vi.fn(async () => {}),
+    savePage: vi.fn(async () => 0),
+    savePageAndCursorTx: vi.fn(async () => ({ inserted: 0 })),
+    loadCursor: vi.fn(async () => undefined),
+    saveCursor: vi.fn(async () => {}),
+  };
+});
 vi.mock("./ingestion", () => ({ runIngestion: vi.fn() }));
 
 import { main } from "./index";
 import { requireEnv } from "./env";
 import { retrievePage } from "./api";
-import { connectDb, migrate, loadCursor, saveCursor, savePage, printCount } from "./db";
+import { connectDb, migrate, loadCursor, saveCursor, savePage, printCount, savePageAndCursorTx } from "./db";
 import { runIngestion } from "./ingestion";
 
 describe("index.ts (wiring)", () => {
@@ -59,6 +64,7 @@ describe("index.ts (wiring)", () => {
       savePage,
       loadCursor,
       saveCursor,
+      savePageAndCursor: savePageAndCursorTx,
       printCount,
     });
 
