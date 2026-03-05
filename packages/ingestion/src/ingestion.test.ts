@@ -6,7 +6,7 @@ describe("ingestion", () => {
   function makeDeps(overrides?: Partial<IngestionDeps>): IngestionDeps {
     return {
       retrievePage: vi.fn(),
-      savePage: vi.fn(async () => {}),
+      savePage: vi.fn(async (_db, page) => page.data.length),
       loadCursor: vi.fn(async () => undefined),
       saveCursor: vi.fn(async () => {}),
       printCount: vi.fn(async () => {}),
@@ -86,5 +86,105 @@ describe("ingestion", () => {
     ).rejects.toThrow(/exceeded maxPages=3/i);
 
     expect(deps.retrievePage).toHaveBeenCalledTimes(3);
+  });
+
+  function makePage(n: number, opts?: Partial<EventsResponse>): EventsResponse {
+    return {
+      data: Array.from({ length: n }, (_, i) => ({
+        id: String(i + 1),
+        ts: "2026-01-01T00:00:00Z",
+        type: "x",
+      })),
+      hasMore: opts?.hasMore ?? false,
+      nextCursor: opts?.nextCursor,
+    };
+  }
+
+  it("metrics: accumulates attempted/inserted and logs periodic summary", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // 10 pages to trigger one periodic metrics log (logEveryPages=10)
+    const pages: EventsResponse[] = Array.from({ length: 10 }, (_, idx) =>
+      makePage(3, {
+        hasMore: idx < 9,
+        nextCursor: idx < 9 ? String((idx + 1) * 3) : undefined,
+      })
+    );
+
+    const deps = {
+      retrievePage: vi.fn(async () => pages.shift()!),
+      // simulate partial inserts (e.g., duplicates): inserted = 2 even though attempted = 3
+      savePage: vi.fn(async (_db: any, page: EventsResponse) => {
+        return page.data.length - 1;
+      }),
+      loadCursor: vi.fn(async () => undefined),
+      saveCursor: vi.fn(async () => {}),
+      printCount: vi.fn(async () => {}),
+    };
+
+    const fakeDb: any = {};
+
+    await runIngestion(deps as any, {
+      baseUrl: "http://x/api/v1",
+      limit: 1000,
+      db: fakeDb,
+      maxPages: 100,
+    });
+
+    // Verify we indeed processed 10 pages
+    expect(deps.retrievePage).toHaveBeenCalledTimes(10);
+    expect(deps.savePage).toHaveBeenCalledTimes(10);
+
+    // Find the metrics summary log line
+    const calls = logSpy.mock.calls.map((c) => String(c[0]));
+    const summary = calls.find((s) => s.includes("[ingestion][metrics]"));
+    expect(summary).toBeTruthy();
+
+    // Attempted: 10 pages * 3 = 30
+    expect(summary!).toContain("attempted=30");
+
+    // Inserted: 10 pages * 2 = 20
+    expect(summary!).toContain("inserted=20");
+
+    // Should include fetchMs/dbMs and insertedPerSec fields (format stable enough)
+    expect(summary!).toContain("fetchMs=");
+    expect(summary!).toContain("dbMs=");
+    expect(summary!).toContain("insertedPerSec=");
+
+    // No warnings expected in this test
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("metrics: does not produce NaN when savePage returns a number", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const deps = {
+      retrievePage: vi.fn(async () =>
+        makePage(1, { hasMore: false })
+      ),
+      savePage: vi.fn(async () => 1),
+      loadCursor: vi.fn(async () => undefined),
+      saveCursor: vi.fn(async () => {}),
+      printCount: vi.fn(async () => {}),
+    };
+
+    const fakeDb: any = {};
+
+    await runIngestion(deps as any, {
+      baseUrl: "http://x/api/v1",
+      limit: 1000,
+      db: fakeDb,
+      maxPages: 10,
+    });
+
+    // Ensure no NaN appears in logs (best-effort sanity check)
+    const calls = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(calls).not.toMatch(/NaN/);
+
+    logSpy.mockRestore();
   });
 });

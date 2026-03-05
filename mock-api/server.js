@@ -16,7 +16,7 @@ app.get("/api/v1/events", (req, res) => {
   });
 
   const nextCursor = String(cursor + limit);
-  const hasMore = cursor + limit < 3000;
+  const hasMore = cursor + limit < 50000;
 
   // add header behavior
   res.set("X-RateLimit-Limit", "100");

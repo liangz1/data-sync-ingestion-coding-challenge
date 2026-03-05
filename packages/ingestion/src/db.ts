@@ -54,8 +54,8 @@ export async function saveCursor(client: Client, cursor: string): Promise<void> 
 export async function savePage(
   client: Client,
   page: EventsResponse
-): Promise<void> {
-  if (page.data.length === 0) return;
+): Promise<number> {
+  if (page.data.length === 0) return 0;
 
   const values: any[] = [];
   const rows: string[] = [];
@@ -73,9 +73,13 @@ export async function savePage(
   `;
 
   const result = await client.query(sql, values);
+  const inserted = result.rowCount ?? 0;
+
   console.log(
-    `[ingestion] attempted=${page.data.length}, inserted=${result.rowCount}`
+    `[ingestion] attempted=${page.data.length}, inserted=${inserted}`
   );
+
+  return inserted;
 }
 
 export async function printCount(client: Client): Promise<void> {

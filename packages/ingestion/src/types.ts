@@ -18,7 +18,7 @@ export type EventsResponse = {
  */
 export type IngestionDeps = {
   retrievePage: (baseUrl: string, limit: number, cursor?: string) => Promise<EventsResponse>;
-  savePage: (db: Client, page: EventsResponse) => Promise<void>;
+  savePage: (db: Client, page: EventsResponse) => Promise<number>;
   loadCursor: (db: Client) => Promise<string | undefined>;
   saveCursor: (db: Client, cursor: string) => Promise<void>;
   printCount: (db: Client) => Promise<void>;
