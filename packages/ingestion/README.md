@@ -125,9 +125,23 @@ The ingestion loop includes:
 
 ------------------------------------------------------------------------
 
+## Rate Limit Handling
+
+The API enforces rate limits and may return `429 Too Many Requests` (or transient `503 Service Unavailable`). The ingestion client is rate-limit aware and applies a retry/backoff strategy:
+
+- **Auth header:** requests include `X-API-Key` (from `TARGET_API_KEY`) for header-based authentication.
+- **Retryable statuses:** `429` and `503` trigger retries; other non-2xx responses fail fast with an error that includes the HTTP status and response body.
+- **Server-guided backoff:** if present, the client respects:
+  - `Retry-After` (seconds or HTTP-date)
+  - `X-RateLimit-Reset` (epoch seconds or milliseconds)
+- **Exponential backoff + jitter:** when server guidance is missing, the client uses exponential backoff (capped) plus a small random jitter to avoid thundering herd.
+- **Observability:** the client logs `ratelimit-remaining` (from `X-RateLimit-Remaining` / `RateLimit-Remaining`) when provided by the API to help diagnose throttling.
+- **Safety cap:** retries are bounded by a maximum retry count to avoid infinite retry loops.
+
+------------------------------------------------------------------------
+
 ## Next Steps (Planned Enhancements)
 
--   Rate limit handling (header-aware backoff)
 -   Throughput optimization (parallel page fetching)
 -   Metrics and ingestion rate logging
 -   Bulk insert optimizations (COPY)
