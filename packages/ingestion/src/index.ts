@@ -6,6 +6,8 @@ import { runIngestion } from "./ingestion";
 export async function main(): Promise<void> {
   const baseUrl = requireEnv("API_BASE_URL");
   const apiKey = requireEnv("TARGET_API_KEY");
+  const maxPagesEnv = process.env.INGEST_MAX_PAGES;
+  const maxPages = maxPagesEnv ? Number(maxPagesEnv) : undefined;
 
   const db = await connectDb();
   await migrate(db);
@@ -19,7 +21,7 @@ export async function main(): Promise<void> {
       savePageAndCursor: savePageAndCursorTx,
       printCount
     },
-    { limit: 1000, db }
+    { limit: 1000, db, maxPages }
   );
 }
 
