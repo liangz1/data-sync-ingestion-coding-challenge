@@ -17,7 +17,7 @@ export type EventsResponse = {
  * In tests, pass mocked deps; in prod, main() wires real deps.
  */
 export type IngestionDeps = {
-  retrievePage: (baseUrl: string, limit: number, cursor?: string) => Promise<EventsResponse>;
+  retrievePage: (limit: number, cursor?: string) => Promise<EventsResponse>;
   savePage: (db: Client, page: EventsResponse) => Promise<number>;
   loadCursor: (db: Client) => Promise<string | undefined>;
   // saveCursor is retained for backward compatibility but not used in the transactional path.
@@ -32,7 +32,6 @@ export type IngestionDeps = {
 };
 
 export type RunIngestionOptions = {
-  baseUrl: string;
   limit: number;
   db: Client;
   // Safety guard: prevents infinite loops if the real API behaves unexpectedly

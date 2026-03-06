@@ -28,7 +28,7 @@ export async function runIngestion(
   deps: IngestionDeps,
   opts: RunIngestionOptions
 ): Promise<void> {
-  const { baseUrl, limit, db } = opts;
+  const { limit, db } = opts;
   const maxPages = opts.maxPages ?? Infinity;
 
   let cursor = await deps.loadCursor(db);
@@ -54,7 +54,7 @@ export async function runIngestion(
     }
 
     const fetchStart = nowMs();
-    const page = await deps.retrievePage(baseUrl, limit, cursor);
+    const page = await deps.retrievePage(limit, cursor);
     const fetchDur = nowMs() - fetchStart;
     metrics.fetchMs += fetchDur;
 

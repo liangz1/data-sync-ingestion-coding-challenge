@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Important: mock dependencies BEFORE importing the module under test
 vi.mock("./env", () => ({ requireEnv: vi.fn() }));
-vi.mock("./api", () => ({ retrievePage: vi.fn() }));
+vi.mock("./api", () => ({
+  fetchEventsPage: vi.fn(),
+}));
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
   return {
@@ -20,7 +22,7 @@ vi.mock("./ingestion", () => ({ runIngestion: vi.fn() }));
 
 import { main } from "./index";
 import { requireEnv } from "./env";
-import { retrievePage } from "./api";
+import { fetchEventsPage } from "./api";
 import { connectDb, migrate, loadCursor, saveCursor, savePage, printCount, savePageAndCursorTx } from "./db";
 import { runIngestion } from "./ingestion";
 
@@ -41,6 +43,7 @@ describe("index.ts (wiring)", () => {
 
     (requireEnv as any).mockImplementation((name: string) => {
       if (name === "API_BASE_URL") return "http://example/api/v1";
+      if (name === "TARGET_API_KEY") return "test-key";
       throw new Error(`unexpected env: ${name}`);
     });
 
@@ -59,20 +62,52 @@ describe("index.ts (wiring)", () => {
 
     const [depsArg, optsArg] = (runIngestion as any).mock.calls[0];
 
-    expect(depsArg).toEqual({
-      retrievePage,
+    expect(depsArg).toMatchObject({
       savePage,
       loadCursor,
       saveCursor,
       savePageAndCursor: savePageAndCursorTx,
       printCount,
     });
+    expect(typeof depsArg.retrievePage).toBe("function");
 
     expect(optsArg).toEqual({
-      baseUrl: "http://example/api/v1",
       limit: 1000,
       db: fakeDb,
     });
+  });
+
+  it("wires retrievePage wrapper with baseUrl + apiKey", async () => {
+    const fakeDb = {} as any;
+
+    (requireEnv as any).mockImplementation((name: string) => {
+      if (name === "API_BASE_URL") return "http://x/api/v1";
+      if (name === "TARGET_API_KEY") return "test-key";
+      throw new Error(`unexpected env: ${name}`);
+    });
+
+    (connectDb as any).mockResolvedValue(fakeDb);
+    (migrate as any).mockResolvedValue(undefined);
+    (runIngestion as any).mockResolvedValue(undefined);
+    (fetchEventsPage as any).mockResolvedValue({
+      data: [],
+      hasMore: false,
+    });
+
+    await main();
+
+    const [depsArg] = (runIngestion as any).mock.calls[0];
+
+    expect(typeof depsArg.retrievePage).toBe("function");
+
+    await depsArg.retrievePage(5, "c1");
+
+    expect(fetchEventsPage).toHaveBeenCalledWith(
+      "http://x/api/v1",
+      "test-key",
+      5,
+      "c1"
+    );
   });
 
   it("propagates errors (doesn't swallow) if migrate fails", async () => {

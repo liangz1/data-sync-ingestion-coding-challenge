@@ -192,6 +192,24 @@ Your solution should include:
    - Any discoveries about the API
    - What you would improve with more time
 
+## How to run the solution?
+
+### Setup
+
+1. Copy the environment template:
+
+```bash
+cp .env.example .env
+```
+
+2. Edit `.env` and set your assigned `TARGET_API_KEY`.
+
+### Run ingestion
+
+```bash
+sh run-ingestion.sh
+```
+
 ## Evaluation Criteria
 
 | Category | Weight |

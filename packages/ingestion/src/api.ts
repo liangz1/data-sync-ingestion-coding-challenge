@@ -113,18 +113,17 @@ async function fetchWithRetry(
 }
 
 /**
- * Retrieve a page of events.
+ * Fetch a page of events.
  */
-export async function retrievePage(
+export async function fetchEventsPage(
   baseUrl: string,
+  apiKey: string,
   limit: number,
   cursor?: string
 ): Promise<EventsResponse> {
   const url = buildEventsUrl(baseUrl, limit, cursor);
 
   console.log(`[ingestion] GET ${url}`);
-
-  const apiKey = process.env.TARGET_API_KEY;
 
   const res = await fetchWithRetry(url, apiKey);
 

@@ -40,11 +40,11 @@ describe("ingestion", () => {
         .mockResolvedValueOnce(pages[1]),
     });
 
-    await runIngestion(deps, { baseUrl: "http://x", limit: 1000, db });
+    await runIngestion(deps, { limit: 1000, db });
 
     expect(deps.retrievePage).toHaveBeenCalledTimes(2);
-    expect(deps.retrievePage).toHaveBeenNthCalledWith(1, "http://x", 1000, undefined);
-    expect(deps.retrievePage).toHaveBeenNthCalledWith(2, "http://x", 1000, "c1");
+    expect(deps.retrievePage).toHaveBeenNthCalledWith(1, 1000, undefined);
+    expect(deps.retrievePage).toHaveBeenNthCalledWith(2, 1000, "c1");
 
     expect(deps.savePageAndCursor).toHaveBeenCalledTimes(1);
     expect(deps.savePage).toHaveBeenCalledTimes(1);
@@ -69,7 +69,7 @@ describe("ingestion", () => {
     });
 
     await expect(
-      runIngestion(deps, { baseUrl: "http://x", limit: 1000, db, maxPages: 10 })
+      runIngestion(deps, { limit: 1000, db, maxPages: 10 })
     ).rejects.toThrow(/nextCursor is missing|Protocol violation/i);
 
     expect(deps.retrievePage).toHaveBeenCalledTimes(1);
@@ -87,7 +87,7 @@ describe("ingestion", () => {
     });
 
     await expect(
-      runIngestion(deps, { baseUrl: "http://x", limit: 1000, db, maxPages: 3 })
+      runIngestion(deps, { limit: 1000, db, maxPages: 3 })
     ).rejects.toThrow(/exceeded maxPages=3/i);
 
     expect(deps.retrievePage).toHaveBeenCalledTimes(3);
@@ -134,7 +134,6 @@ describe("ingestion", () => {
     const fakeDb: any = {};
 
     await runIngestion(deps as any, {
-      baseUrl: "http://x/api/v1",
       limit: 1000,
       db: fakeDb,
       maxPages: 100,
@@ -184,7 +183,6 @@ describe("ingestion", () => {
     const fakeDb: any = {};
 
     await runIngestion(deps as any, {
-      baseUrl: "http://x/api/v1",
       limit: 1000,
       db: fakeDb,
       maxPages: 10,
@@ -212,7 +210,7 @@ describe("ingestion", () => {
       printCount: vi.fn(async () => {}),
     };
 
-    await runIngestion(deps as any, { baseUrl: "http://x", limit: 1000, db: {} as any, maxPages: 10 });
+    await runIngestion(deps as any, { limit: 1000, db: {} as any, maxPages: 10 });
 
     expect(deps.savePageAndCursor).toHaveBeenCalledTimes(1);
     expect(deps.savePage).toHaveBeenCalledTimes(1); // only last page

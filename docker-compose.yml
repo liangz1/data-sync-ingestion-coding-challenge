@@ -43,8 +43,9 @@ services:
     build: ./packages/ingestion
     container_name: assignment-ingestion
     environment:
-      API_BASE_URL: http://mock-api:8787/api/v1
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ingestion
+      API_BASE_URL: ${API_BASE_URL}
+      TARGET_API_KEY: ${TARGET_API_KEY}
+      DATABASE_URL: ${DATABASE_URL}
     depends_on:
       postgres:
         condition: service_healthy

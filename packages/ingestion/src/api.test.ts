@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { buildEventsUrl, retrievePage } from "./api";
+import { buildEventsUrl, fetchEventsPage } from "./api";
 
 type AnyResponse = any;
 
@@ -43,9 +43,7 @@ describe("api", () => {
     expect(url).toBe("http://mock-api:8787/api/v1/events?limit=1000&cursor=abc");
   });
 
-  it("retrievePage sends X-API-Key header when TARGET_API_KEY is set", async () => {
-    process.env.TARGET_API_KEY = "test-key";
-
+  it("fetchEventsPage sends X-API-Key header when TARGET_API_KEY is provided", async () => {
     // @ts-ignore
     globalThis.fetch = vi.fn(async (_url: string, init?: any) => {
       expect(init?.headers?.["X-API-Key"]).toBe("test-key");
@@ -56,11 +54,11 @@ describe("api", () => {
       });
     });
 
-    await retrievePage("http://x/api/v1", 5);
+    await fetchEventsPage("http://x/api/v1", "test-key", 5);
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("retrievePage returns parsed JSON on success", async () => {
+  it("fetchEventsPage returns parsed JSON on success", async () => {
     const payload = {
       data: [{ id: "1", ts: "2026-01-01T00:00:00Z", type: "x" }],
       hasMore: false,
@@ -77,12 +75,12 @@ describe("api", () => {
       });
     });
 
-    const page = await retrievePage("http://mock-api:8787/api/v1", 5);
+    const page = await fetchEventsPage("http://mock-api:8787/api/v1", "test-key", 5);
     expect(page.hasMore).toBe(false);
     expect(page.data[0].id).toBe("1");
   });
 
-  it("retrievePage throws on non-2xx and includes status/body", async () => {
+  it("fetchEventsPage throws on non-2xx and includes status/body", async () => {
     // Non-retryable error (e.g. 401) should fail fast and include body
     // @ts-ignore
     globalThis.fetch = vi.fn(async () => {
@@ -93,7 +91,7 @@ describe("api", () => {
       });
     });
 
-    await expect(retrievePage("http://mock-api:8787/api/v1", 10)).rejects.toThrow(
+    await expect(fetchEventsPage("http://mock-api:8787/api/v1", "test-key", 10)).rejects.toThrow(
       "API error: 401 unauthorized"
     );
   });
@@ -126,7 +124,7 @@ describe("api", () => {
         })
       );
 
-    const p = retrievePage("http://x/api/v1", 5);
+    const p = fetchEventsPage("http://x/api/v1", "test-key", 5);
 
     // Let the internal sleep() elapse
     await vi.runAllTimersAsync();
@@ -169,7 +167,7 @@ describe("api", () => {
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    const p = retrievePage("http://x/api/v1", 5);
+    const p = fetchEventsPage("http://x/api/v1", "test-key", 5);
 
     // Execute timers (sleep)
     await vi.runAllTimersAsync();
