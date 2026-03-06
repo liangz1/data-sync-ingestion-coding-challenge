@@ -269,6 +269,12 @@ I would add:
 
 ---
 
+## AI Tools used
+
+ChatGPT Auto
+
+---
+
 ## Summary
 
 This solution evolved from a straightforward cursor-based ingester into a more scalable feed-based ingestion system.
