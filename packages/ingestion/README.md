@@ -1,339 +1,263 @@
-# Event Ingestion Service
+# Data Sync Ingestion Service
 
-A resilient ingestion service that fetches events from a paginated HTTP API and stores them in PostgreSQL.
+A resilient, resumable event ingestion service that pulls paginated events from an external API and stores them in PostgreSQL.
 
-The service supports:
-
-- Cursor-based incremental ingestion
-- Idempotent writes
-- Automatic recovery after restart
-- Rate limit handling
-- Transactional page commits
-- Basic ingestion metrics
+The system is designed to run entirely in Docker and complete ingestion automatically without manual intervention.
 
 ---
 
-# Architecture
+# Architecture Overview
 
-The ingestion loop performs the following steps:
+```
+DataSync API
+      │
+      ▼
+Ingestion Worker
+      │
+      ▼
+PostgreSQL
+```
 
-1. Load the last processed cursor from the database.
-2. Fetch a page of events from the API.
-3. Store the events in PostgreSQL.
-4. Persist the next cursor.
-5. Repeat until `hasMore=false`.
+The ingestion worker:
 
-Each page is processed exactly once in normal operation, and ingestion can safely resume after interruption.
+1. Fetches paginated events from the API
+2. Writes events to PostgreSQL
+3. Stores the latest cursor
+4. Resumes automatically after restarts
 
 ---
 
-# Data Model
+# Requirements
 
-## ingested_events
+The solution:
 
-Stores the raw events returned by the API.
-
-Primary key ensures idempotency.
+- Runs entirely in Docker
+- Works using the command:
 
 ```
-id TEXT PRIMARY KEY
-ts TIMESTAMP
-type TEXT
-raw JSONB
+sh run-ingestion.sh
 ```
 
-Duplicates are ignored using:
+No manual steps are required once ingestion starts.
+
+---
+
+# Configuration
+
+The ingestion worker uses environment variables.
+
+Example `.env`:
+
+```
+TARGET_API_KEY=your_api_key_here
+```
+
+Required variables:
+
+| Variable | Description |
+|--------|-------------|
+| API_BASE_URL | Base URL of the DataSync API |
+| TARGET_API_KEY | API key used for authentication |
+| DATABASE_URL | PostgreSQL connection string |
+
+`.env` files are **not committed to git**.
+
+`.env.example` is provided as a template.
+
+---
+
+# Running the System
+
+Start the full system:
+
+```
+sh run-ingestion.sh
+```
+
+This launches:
+
+- PostgreSQL
+- Mock API
+- Ingestion worker
+
+The ingestion worker will:
+
+1. Run database migrations
+2. Load the saved cursor
+3. Fetch event pages from the API
+4. Store events in PostgreSQL
+5. Continue until `hasMore=false`
+
+---
+
+# Mock API
+
+A configurable mock API is provided for local testing.
+
+Supported features:
+
+| Feature | Description |
+|------|-------------|
+| Configurable event count | `MOCK_TOTAL_EVENTS` |
+| Max page size | `MOCK_MAX_LIMIT` |
+| API key validation | `MOCK_REQUIRE_API_KEY`, `MOCK_API_KEY` |
+| Rate limiting simulation | `MOCK_RATE_LIMIT_EVERY_N` |
+| Retry delay simulation | `MOCK_RETRY_AFTER_SECONDS` |
+| Cursor expiration | `MOCK_CURSOR_TTL_SECONDS` |
+| Protocol violation injection | `MOCK_BREAK_PROTOCOL_AT_CURSOR` |
+| Response latency | `MOCK_RESPONSE_DELAY_MS` |
+
+This allows testing failure scenarios without using a real API key.
+
+---
+
+# Ingestion Guarantees
+
+## Idempotent Writes
+
+Events are inserted using:
 
 ```
 ON CONFLICT (id) DO NOTHING
 ```
 
----
-
-## ingestion_state
-
-Stores the ingestion cursor.
-
-```
-key TEXT PRIMARY KEY
-value TEXT
-updated_at TIMESTAMP
-```
-
-Only one key is currently used:
-
-```
-cursor
-```
+Duplicate events are ignored safely.
 
 ---
 
-# Transactional Ingestion
+## Transactional Page Commit
 
-To ensure consistency during ingestion, each page commit is performed in a **single database transaction**.
-
-Within one transaction:
-
-1. Insert events
-2. Update cursor
-3. Commit
+Each page is written in a single transaction:
 
 ```
 BEGIN
-
-INSERT INTO ingested_events ...
-ON CONFLICT DO NOTHING
-
-UPSERT ingestion_state(cursor)
-
+INSERT events
+UPDATE cursor
 COMMIT
 ```
 
-This guarantees:
-
-- No cursor advancement without persisted data
-- No partial page ingestion
-- Safe restart after crashes
+This ensures a cursor is never advanced without its data being committed.
 
 ---
 
-# Rate Limit Handling
+## Rate Limit Handling
 
-The API may return HTTP **429 (Too Many Requests)**.
+The ingestion client automatically handles rate limits.
 
-The ingestion client automatically retries requests when rate limits occur.
+When receiving `429`:
 
-Supported headers:
+- respects `Retry-After`
+- respects `X-RateLimit-Reset`
+- retries automatically
 
-### Retry-After
-
-```
-Retry-After: <seconds>
-```
-
-The client waits the specified number of seconds before retrying.
-
-### X-RateLimit-Reset
-
-```
-X-RateLimit-Reset: <epoch_seconds>
-```
-
-The client waits until the reset timestamp.
-
-### Logging
-
-The client logs remaining quota if provided:
+Example log:
 
 ```
 [ingestion] ratelimit-remaining=99
 ```
 
-This helps operators monitor available request budget.
+---
+
+## Protocol Safety
+
+The worker validates API pagination responses.
+
+If the API returns:
+
+```
+hasMore=true but nextCursor missing
+```
+
+the worker fails fast to prevent infinite loops.
 
 ---
 
-# Metrics
+## Cursor Expiration
 
-Periodic ingestion metrics are logged every N pages:
+Sequential ingestion continuously refreshes cursors and normally avoids expiration.
+
+Cursor expiration mainly affects restart scenarios.
+
+If a stored cursor becomes invalid:
+
+- ingestion fails fast
+- restarting from the beginning is safe due to idempotent inserts
+
+---
+
+# Observability
+
+The worker logs ingestion progress and metrics.
+
+Example logs:
 
 ```
-[ingestion][metrics]
-pages=10
-attempted=10000
-inserted=9987
-fetchMs=210
-dbMs=180
-insertedPerSec=4200
+[ingestion] attempted=1000, inserted=1000
+[ingestion] ratelimit-remaining=99
+[ingestion] total rows=3000
 ```
 
 Metrics include:
 
-| Metric | Meaning |
-|------|------|
-| pages | number of processed pages |
-| attempted | events received from API |
-| inserted | rows inserted into DB |
-| fetchMs | total API request time |
-| dbMs | total database write time |
-| insertedPerSec | ingestion throughput |
-
----
-
-# Idempotency
-
-The system is designed for **at-least-once ingestion**.
-
-Possible scenarios:
-
-- restart during ingestion
-- duplicate page fetch
-- network retry
-
-Duplicates are safely ignored by the database primary key constraint.
-
-Example log:
-
-```
-attempted=1000 inserted=0
-```
-
-This indicates the page was already previously ingested.
-
----
-
-# Resumability
-
-On startup the service resumes from the last saved cursor:
-
-```
-[ingestion] starting from cursor=9000
-```
-
-If the service crashes mid-run, ingestion continues from that position on restart.
-
----
-
-# Running the Service
-
-```
-docker compose up
-```
-
-Logs will show ingestion progress:
-
-```
-[ingestion] starting from cursor=BEGIN
-[ingestion] GET /events?limit=1000
-[ingestion] attempted=1000 inserted=1000
-```
+- pages processed
+- attempted inserts
+- successful inserts
+- rate limit headers
 
 ---
 
 # Testing
 
-Run unit tests:
+The system is tested with:
 
-```
-npm test
-```
+- Unit tests for ingestion logic
+- Mocked database and API clients
+- Integration tests using the mock API
 
-Tests cover:
+Test scenarios include:
 
-- API pagination
-- rate limit retry logic
-- database insertion
-- cursor persistence
-- ingestion loop behavior
-
----
-
-# Failure Scenarios & Guarantees
-
-The ingestion system is designed to remain correct under common failure scenarios.
-
-## Crash During API Fetch
-
-If the service crashes while fetching a page:
-
-- No database writes have occurred
-- Cursor remains unchanged
-
-On restart the same page will be fetched again.
-
-This is safe because ingestion is idempotent.
+- normal ingestion
+- rate limiting
+- protocol violations
+- oversized page requests
+- cursor expiration
 
 ---
 
-## Crash During Database Insert
+# Project Structure
 
-If the service crashes during page insertion:
+```
+packages/
+  ingestion/
+    src/
+      api.ts
+      db.ts
+      ingestion.ts
+      index.ts
+      env.ts
+mock-api/
+docker-compose.yml
+```
 
-- The database transaction is rolled back
-- No partial page writes are committed
-- Cursor is not advanced
+The codebase separates:
 
-The same page will be retried on restart.
+- API client
+- database logic
+- ingestion loop
+- configuration
+
+to keep components testable and maintainable.
 
 ---
 
-## Crash After Insert But Before Cursor Update
+# Summary
 
-This situation is prevented by the transactional design.
+This ingestion system provides:
 
-Event insertion and cursor persistence occur in the same transaction:
+- resumable ingestion
+- idempotent writes
+- transactional page commits
+- rate limit resilience
+- configurable failure testing via mock API
 
-```
-BEGIN
-INSERT events
-UPSERT cursor
-COMMIT
-```
-
-Therefore:
-
-- Either both succeed
-- Or both fail
-
-The system never advances the cursor without storing the corresponding events.
-
----
-
-## Duplicate Page Fetch
-
-Network retries or restarts may cause the same page to be processed more than once.
-
-Duplicates are handled safely via the primary key constraint:
-
-```
-ON CONFLICT (id) DO NOTHING
-```
-
-Example log:
-
-```
-attempted=1000 inserted=0
-```
-
-This indicates that all events already existed in the database.
-
----
-
-## API Protocol Violations
-
-If the API returns:
-
-```
-hasMore = true
-but nextCursor is missing
-```
-
-The ingestion process fails fast with an explicit error.
-
-This prevents silent data loss caused by malformed pagination responses.
-
----
-
-## Guarantees
-
-The system provides the following guarantees:
-
-| Property | Guarantee |
-|--------|--------|
-| No data loss | Cursor never advances without persisted events |
-| Idempotency | Duplicate events are ignored |
-| Crash safety | Safe restart after failure |
-| At-least-once ingestion | Pages may be retried but never skipped |
-
-These properties ensure reliable ingestion even under network errors, rate limiting, or process crashes.
-
----
-
-# Future Improvements
-
-Possible optimizations:
-
-- concurrent page prefetching
-- batch COPY ingestion for higher throughput
-- adaptive rate limit scheduling
-- structured metrics export (Prometheus)
+The architecture is designed for reliability under real-world API behavior.

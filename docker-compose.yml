@@ -45,7 +45,7 @@ services:
     environment:
       API_BASE_URL: ${API_BASE_URL}
       TARGET_API_KEY: ${TARGET_API_KEY}
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ingestion
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,6 +55,18 @@ services:
   mock-api:
     build: ./mock-api
     container_name: assignment-mock-api
+    environment:
+      PORT: 8787
+      MOCK_TOTAL_EVENTS: 3000
+      MOCK_MAX_LIMIT: 1000
+      MOCK_REQUIRE_API_KEY: "true"
+      MOCK_API_KEY: "mock-key"
+      MOCK_RATE_LIMIT_EVERY_N: 0
+      MOCK_RETRY_AFTER_SECONDS: 1
+      MOCK_RATELIMIT_REMAINING: 99
+      MOCK_CURSOR_TTL_SECONDS: 2
+      MOCK_RESPONSE_DELAY_MS: 0
+      MOCK_BREAK_PROTOCOL_AT_CURSOR: ""
     networks:
       - assignment-network
 
