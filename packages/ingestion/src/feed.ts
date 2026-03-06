@@ -252,7 +252,7 @@ export class FeedClient {
   ): Promise<NormalizedPage> {
     let lastErr: unknown;
 
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
       try {
         const rawPage = await this.fetchPage(limit, sinceMs, untilMs, cursor);
         return normalizeFeedPage(rawPage);
@@ -260,17 +260,49 @@ export class FeedClient {
         lastErr = err;
 
         const msg = err instanceof Error ? err.message : String(err);
-        const isRetryable =
+
+        const isRateLimited = msg.includes("status=429");
+
+        const isRetryableServerError =
           msg.includes("status=502") ||
           msg.includes("status=503") ||
           msg.includes("status=504");
 
-        if (!isRetryable || attempt === 3) {
+        const isRetryableInvalidJson =
+          msg.includes("[feed] invalid JSON response") ||
+          msg.includes("Infinity");
+
+        if (
+          (!isRateLimited &&
+            !isRetryableServerError &&
+            !isRetryableInvalidJson) ||
+          attempt === 5
+        ) {
           throw err;
         }
 
+        if (isRateLimited) {
+          console.warn(
+            `[feed] rate limited on attempt=${attempt}/5 since=${sinceMs} until=${untilMs}; backing off before retry`
+          );
+
+          const backoffMs = 10_000 * attempt; // 10s, 20s, 30s...
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          continue;
+        }
+
+        if (isRetryableInvalidJson) {
+          console.warn(
+            `[feed] invalid JSON on attempt=${attempt}/5 since=${sinceMs} until=${untilMs}; retrying after backoff`
+          );
+
+          const backoffMs = 5_000 * attempt;
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          continue;
+        }
+
         console.warn(
-          `[feed] transient error on attempt=${attempt}/3; refreshing token and retrying`
+          `[feed] transient server error on attempt=${attempt}/5 since=${sinceMs} until=${untilMs}; refreshing token and retrying`
         );
 
         await this.refreshToken();
