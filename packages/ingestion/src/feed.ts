@@ -195,20 +195,60 @@ export class FeedClient {
   ) {}
 
   private async refreshToken(): Promise<void> {
-    const stream = await getStreamAccess(this.baseUrl, this.apiKey);
+    let lastErr: unknown;
 
-    this.endpoint = stream.endpoint;
-    this.token = stream.token;
-    this.tokenHeader = stream.tokenHeader;
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      try {
+        const stream = await getStreamAccess(this.baseUrl, this.apiKey);
 
-    // Refresh a little early to avoid edge-of-expiry failures.
-    const safetyBufferMs = 10_000;
-    this.tokenExpiresAtMs =
-      Date.now() + Math.max(0, stream.expiresIn * 1000 - safetyBufferMs);
+        this.endpoint = stream.endpoint;
+        this.token = stream.token;
+        this.tokenHeader = stream.tokenHeader;
 
-    console.log(
-      `[feed] stream token acquired, expiresIn=${stream.expiresIn}s endpoint=${stream.endpoint}`
-    );
+        // Refresh a little early to avoid edge-of-expiry failures.
+        const safetyBufferMs = 10_000;
+        this.tokenExpiresAtMs =
+          Date.now() + Math.max(0, stream.expiresIn * 1000 - safetyBufferMs);
+
+        console.log(
+          `[feed] stream token acquired, expiresIn=${stream.expiresIn}s endpoint=${stream.endpoint}`
+        );
+
+        return;
+      } catch (err) {
+        lastErr = err;
+
+        const msg = err instanceof Error ? err.message : String(err);
+        const isRetryable =
+          msg.includes("status=429") ||
+          msg.includes("status=502") ||
+          msg.includes("status=503") ||
+          msg.includes("status=504");
+
+        if (!isRetryable || attempt === 5) {
+          throw err;
+        }
+
+        if (msg.includes("status=429")) {
+          console.warn(
+            `[feed] stream-access rate limited on attempt=${attempt}/5; backing off before retry`
+          );
+
+          const backoffMs = 10_000 * attempt; // 10s, 20s, 30s...
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          continue;
+        }
+
+        console.warn(
+          `[feed] stream-access transient error on attempt=${attempt}/5; retrying`
+        );
+
+        const backoffMs = 1000 * Math.pow(2, attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
   async ensureToken(): Promise<void> {
