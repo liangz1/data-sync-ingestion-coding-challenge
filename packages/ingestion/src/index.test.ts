@@ -110,6 +110,20 @@ describe("index.ts (wiring)", () => {
     );
   });
 
+  it("fails fast when TARGET_API_KEY is missing", async () => {
+    (requireEnv as any).mockImplementation((name: string) => {
+      if (name === "API_BASE_URL") return "http://x/api/v1";
+      if (name === "TARGET_API_KEY") throw new Error("TARGET_API_KEY is required");
+      throw new Error(`unexpected env: ${name}`);
+    });
+
+    await expect(main()).rejects.toThrow("TARGET_API_KEY is required");
+
+    expect(connectDb).not.toHaveBeenCalled();
+    expect(migrate).not.toHaveBeenCalled();
+    expect(runIngestion).not.toHaveBeenCalled();
+  });
+
   it("propagates errors (doesn't swallow) if migrate fails", async () => {
     const fakeDb = {} as any;
 
