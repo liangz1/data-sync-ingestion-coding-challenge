@@ -1,4 +1,8 @@
-import type { Client } from "pg";
+import type { PoolClient } from "pg";
+
+export type DbExecutor = {
+  query: PoolClient["query"];
+};
 
 export type DataSyncEvent = {
   id: string;
@@ -18,22 +22,22 @@ export type EventsResponse = {
  */
 export type IngestionDeps = {
   retrievePage: (limit: number, cursor?: string) => Promise<EventsResponse>;
-  savePage: (db: Client, page: EventsResponse) => Promise<number>;
-  loadCursor: (db: Client) => Promise<string | undefined>;
+  savePage: (db: DbExecutor, page: EventsResponse) => Promise<number>;
+  loadCursor: (db: DbExecutor) => Promise<string | undefined>;
   // saveCursor is retained for backward compatibility but not used in the transactional path.
-  saveCursor: (db: Client, cursor: string) => Promise<void>;
+  saveCursor: (db: DbExecutor, cursor: string) => Promise<void>;
   // Transactional write: page + cursor in one atomic commit
   savePageAndCursor: (
-    db: Client,
+    db: DbExecutor,
     page: EventsResponse,
     nextCursor: string
   ) => Promise<{ inserted: number }>;
-  printCount: (db: Client) => Promise<void>;
+  printCount: (db: DbExecutor) => Promise<void>;
 };
 
 export type RunIngestionOptions = {
   limit: number;
-  db: Client;
+  db: DbExecutor;
   // Safety guard: prevents infinite loops if the real API behaves unexpectedly
   maxPages?: number;
 };

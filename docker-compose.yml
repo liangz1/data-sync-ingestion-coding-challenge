@@ -46,6 +46,10 @@ services:
       API_BASE_URL: ${API_BASE_URL}
       TARGET_API_KEY: ${TARGET_API_KEY}
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ingestion
+      PGPOOLSIZE: 10
+      # Feed ingestion settings
+      FEED_CONCURRENCY: 4
+      FEED_SHARD_MS: 86400000
     depends_on:
       postgres:
         condition: service_healthy

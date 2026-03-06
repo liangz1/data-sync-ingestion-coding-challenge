@@ -1,17 +1,23 @@
-import { Client } from "pg";
 import { requireEnv } from "./env";
 import type { EventsResponse } from "./types";
+import type { PoolClient } from "pg";
+import { Pool } from "pg";
 
-export async function connectDb(): Promise<Client> {
-  const client = new Client({
-    connectionString: requireEnv("DATABASE_URL"),
+type DbExecutor = {
+  query: PoolClient["query"];
+};
+
+export async function connectDb(): Promise<Pool> {
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: Number(process.env.PGPOOLSIZE || 10),
   });
-  await client.connect();
-  return client;
+
+  return pool;
 }
 
-export async function migrate(client: Client): Promise<void> {
-  await client.query(`
+export async function migrate(DbExecutor: DbExecutor): Promise<void> {
+  await DbExecutor.query(`
     CREATE TABLE IF NOT EXISTS ingested_events (
       id TEXT PRIMARY KEY,
       ts TIMESTAMPTZ,
@@ -21,7 +27,7 @@ export async function migrate(client: Client): Promise<void> {
     );
   `);
 
-  await client.query(`
+  await DbExecutor.query(`
     CREATE TABLE IF NOT EXISTS ingestion_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -32,15 +38,15 @@ export async function migrate(client: Client): Promise<void> {
   console.log("[ingestion] migration complete");
 }
 
-export async function loadCursor(client: Client): Promise<string | undefined> {
-  const r = await client.query(
+export async function loadCursor(DbExecutor: DbExecutor): Promise<string | undefined> {
+  const r = await DbExecutor.query(
     `SELECT value FROM ingestion_state WHERE key = 'cursor';`
   );
   return r.rows[0]?.value;
 }
 
-export async function saveCursor(client: Client, cursor: string): Promise<void> {
-  await client.query(
+export async function saveCursor(DbExecutor: DbExecutor, cursor: string): Promise<void> {
+  await DbExecutor.query(
     `
     INSERT INTO ingestion_state(key, value)
     VALUES ('cursor', $1)
@@ -52,7 +58,7 @@ export async function saveCursor(client: Client, cursor: string): Promise<void> 
 }
 
 export async function savePage(
-  client: Client,
+  DbExecutor: DbExecutor,
   page: EventsResponse
 ): Promise<number> {
   if (page.data.length === 0) return 0;
@@ -72,7 +78,7 @@ export async function savePage(
     ON CONFLICT (id) DO NOTHING;
   `;
 
-  const result = await client.query(sql, values);
+  const result = await DbExecutor.query(sql, values);
   const inserted = result.rowCount ?? 0;
 
   console.log(
@@ -83,16 +89,16 @@ export async function savePage(
 }
 
 export async function savePageAndCursorTx(
-  client: Client,
+  DbExecutor: DbExecutor,
   page: EventsResponse,
   nextCursor: string | undefined
 ): Promise<{ inserted: number }> {
-  await client.query("BEGIN");
+  await DbExecutor.query("BEGIN");
   try {
-    const inserted = await savePage(client, page);
+    const inserted = await savePage(DbExecutor, page);
 
     if (nextCursor) {
-      await client.query(
+      await DbExecutor.query(
         `
         INSERT INTO ingestion_state(key, value)
         VALUES ('cursor', $1)
@@ -103,16 +109,16 @@ export async function savePageAndCursorTx(
       );
     }
 
-    await client.query("COMMIT");
+    await DbExecutor.query("COMMIT");
     return { inserted };
   } catch (e) {
-    await client.query("ROLLBACK");
+    await DbExecutor.query("ROLLBACK");
     throw e;
   }
 }
 
-export async function printCount(client: Client): Promise<void> {
-  const r = await client.query(
+export async function printCount(DbExecutor: DbExecutor): Promise<void> {
+  const r = await DbExecutor.query(
     `SELECT COUNT(*)::bigint AS c FROM ingested_events;`
   );
   console.log(`[ingestion] total rows=${r.rows[0].c}`);
